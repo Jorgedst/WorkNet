@@ -652,41 +652,47 @@ class GraphService:
     def get_network_graph_data(self) -> dict:
         if self._cache["network_graph_data"] is not None:
             return self._cache["network_graph_data"]
-        users = _run(
-            "MATCH (u:Usuario) RETURN u.email AS id, u.nombre AS label, 'user' AS type"
-        )
-        companies = _run(
-            "MATCH (e:Empresa) RETURN e.nombre AS id, e.nombre AS label, 'company' AS type"
-        )
-        connections = _run(
-            "MATCH (a:Usuario)-[:CONECTA_CON]->(b:Usuario) "
-            "RETURN a.email AS from, b.email AS to, 'CONECTA_CON' AS type"
-        )
-        works = _run(
-            "MATCH (u:Usuario)-[:TRABAJA_EN]->(e:Empresa) "
-            "RETURN u.email AS from, e.nombre AS to, 'TRABAJA_EN' AS type"
-        )
+
+        rows = _run("""
+            MATCH (a)-[r:CONECTA_CON|TRABAJA_EN|PUBLICA]->(b)
+            WHERE (a:Usuario OR a:Empresa) AND (b:Usuario OR b:Empresa OR b:Oferta)
+            RETURN
+                coalesce(a.email, a.nombre) AS from_id,
+                coalesce(a.nombre, a.email) AS from_label,
+                labels(a)[0] AS from_type,
+                coalesce(b.email, b.nombre, b.titulo) AS to_id,
+                coalesce(b.nombre, b.titulo, b.email) AS to_label,
+                labels(b)[0] AS to_type,
+                type(r) AS rel_type
+        """)
 
         avatar_colors = ["#2563eb", "#7c3aed", "#059669", "#dc2626",
-                         "#d97706", "#0891b2", "#e11d48", "#4f46e5"]
-        logo_colors = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#0891b2"]
+                        "#d97706", "#0891b2", "#e11d48", "#4f46e5"]
+        logo_colors   = ["#4f46e5", "#7c3aed", "#059669", "#d97706", "#0891b2"]
 
-        nodes = []
-        for u in users:
-            nodes.append({
-                "id": u["id"], "label": u["label"], "type": "user",
-                "color": avatar_colors[hash(u["id"]) % len(avatar_colors)],
-            })
-        for c in companies:
-            nodes.append({
-                "id": c["id"], "label": c["label"], "type": "company",
-                "color": logo_colors[hash(c["id"]) % len(logo_colors)],
-            })
+        type_map = {"Usuario": "user", "Empresa": "company", "Oferta": "job"}
+        nodes_seen = {}
+        edges = []
 
-        edges = [{"from": r["from"], "to": r["to"], "type": r["type"]}
-                 for r in connections + works]
+        for r in rows:
+            for nid, nlabel, ntype in [
+                (r["from_id"], r["from_label"], r["from_type"]),
+                (r["to_id"],   r["to_label"],   r["to_type"]),
+            ]:
+                if nid and nid not in nodes_seen:
+                    t = type_map.get(ntype, "user")
+                    if t == "user":
+                        color = avatar_colors[hash(nid) % len(avatar_colors)]
+                    elif t == "company":
+                        color = logo_colors[hash(nid) % len(logo_colors)]
+                    else:
+                        color = "#e11d48"
+                    nodes_seen[nid] = {"id": nid, "label": nlabel, "type": t, "color": color}
 
-        data = {"nodes": nodes, "edges": edges}
+            if r["from_id"] and r["to_id"]:
+                edges.append({"from": r["from_id"], "to": r["to_id"], "type": r["rel_type"]})
+
+        data = {"nodes": list(nodes_seen.values()), "edges": edges}
         self._cache["network_graph_data"] = data
         return data
 

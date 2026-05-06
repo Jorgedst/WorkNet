@@ -169,7 +169,6 @@ def dashboard_content(page: ft.Page, on_view_profile=None):
             all_users     = [u for u in service.get_all_users() if u.id != current_user.id]
             my_apps       = service.get_user_applications(current_user.id)
             applied_jobs  = [service.get_job(jid) for jid in my_apps if service.get_job(jid)]
-            graph_data    = service.get_network_graph_data()
         except Exception:
             return
 
@@ -398,12 +397,40 @@ def dashboard_content(page: ft.Page, on_view_profile=None):
                 spacing=0, scroll=ft.ScrollMode.AUTO, expand=True,
             )
 
-        # ── Network graph ─────────────────────────────────────────────────────
-        graph_panel = network_graph(
-            graph_data,
-            on_node_click=lambda nid: on_view_profile(nid)
-            if on_view_profile and nid.startswith("u") else None,
+        graph_container = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Text("Grafo Visual de Red", color=TEXT_PRIMARY, size=16,
+                            weight=ft.FontWeight.W_600),
+                    ft.Container(
+                        content=ft.ProgressRing(color=ACCENT_PRIMARY, width=32, height=32),
+                        alignment=ft.Alignment(0, 0),
+                        expand=True,
+                    ),
+                ],
+                spacing=8,
+            ),
+            bgcolor=BG_CARD,
+            border_radius=16,
+            border=ft.border.all(1, BORDER_COLOR),
+            padding=16,
+            expand=True,
         )
+
+        def _load_graph():
+            try:
+                graph_data = service.get_network_graph_data()
+                panel = network_graph(
+                    graph_data,
+                    on_node_click=lambda n: on_view_profile(n["id"]) if on_view_profile and n["type"] == "user" else None,
+                )
+                graph_container.content = panel.content
+                graph_container.update()
+            except Exception:
+                pass
+
+        threading.Thread(target=_load_graph, daemon=True).start()
+        graph_panel = graph_container 
 
         # ── Swap skeleton → real content ──────────────────────────────────────
         content_area.content = left_col
