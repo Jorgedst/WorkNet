@@ -20,7 +20,7 @@ def projects_content(page: ft.Page, on_view_profile=None):
         my_applications = []
     else:
         user_projects = service.get_user_projects(current_user.id)
-        my_applications = [a["job_id"] for a in service.applications if a["user_id"] == current_user.id]
+        my_applications = service.get_user_applications(current_user.id)
         applied_projects_ids = [service.get_job(jid).project_id for jid in my_applications if service.get_job(jid)]
         visible_project_ids = set([p.id for p in user_projects] + applied_projects_ids)
         projects_to_show = [service.get_project(pid) for pid in visible_project_ids if service.get_project(pid)]

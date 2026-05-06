@@ -10,10 +10,11 @@ from .jobs_view import jobs_content
 from .profile_view import profile_content
 from .settings_view import settings_content
 from .company_register_view import company_register_view
+from .graph_analysis_view import graph_analysis_content
 
 __all__ = [
     "login_view", "register_view", "dashboard_content",
     "network_content", "companies_content", "projects_content",
     "jobs_content", "profile_content", "settings_content",
-    "company_register_view"
+    "company_register_view", "graph_analysis_content",
 ]

@@ -11,11 +11,12 @@ def create_sidebar(page: ft.Page, active_route: str, on_navigate, current_user=N
     """Build the sidebar with user info and navigation items."""
 
     nav_items = [
-        {"icon": ft.Icons.DASHBOARD_ROUNDED, "label": "Dashboard", "route": "dashboard"},
-        {"icon": ft.Icons.PEOPLE_ROUNDED, "label": "Mi Red", "route": "network"},
-        {"icon": ft.Icons.FOLDER_ROUNDED, "label": "Proyectos", "route": "projects"},
-        {"icon": ft.Icons.WORK_ROUNDED, "label": "Vacantes", "route": "jobs"},
-        {"icon": ft.Icons.BUSINESS_ROUNDED, "label": "Empresas", "route": "companies"},
+        {"icon": ft.Icons.DASHBOARD_ROUNDED,   "label": "Dashboard",  "route": "dashboard"},
+        {"icon": ft.Icons.PEOPLE_ROUNDED,       "label": "Mi Red",     "route": "network"},
+        {"icon": ft.Icons.FOLDER_ROUNDED,       "label": "Proyectos",  "route": "projects"},
+        {"icon": ft.Icons.WORK_ROUNDED,         "label": "Vacantes",   "route": "jobs"},
+        {"icon": ft.Icons.BUSINESS_ROUNDED,     "label": "Empresas",   "route": "companies"},
+        {"icon": ft.Icons.ANALYTICS_ROUNDED,    "label": "Análisis",   "route": "graph"},
     ]
 
     def build_nav_item(item):

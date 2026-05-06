@@ -49,7 +49,7 @@ def company_register_view(page: ft.Page):
         from datetime import datetime
         
         c_id = f"c_{uuid.uuid4().hex[:8]}"
-        u_id = f"u_{uuid.uuid4().hex[:8]}"
+        u_id = u_email.value
         p_id = f"p_{uuid.uuid4().hex[:8]}"
         j_id = f"j_{uuid.uuid4().hex[:8]}"
         
@@ -65,8 +65,10 @@ def company_register_view(page: ft.Page):
                         skills=[], is_online=True)
         service.create_user(new_user)
         
-        # 3. WorksAt relation
-        service.works_at.append(WorksAt(u_id, c_id, "Administrador", datetime.now().strftime("%Y-%m-%d"), is_current=True))
+        # 3. WorksAt relation in Neo4j
+        from services.connection import get_driver, trabaja_en
+        driver = get_driver()
+        trabaja_en(driver, u_email.value, c_name.value)
         
         # 4. Project
         new_proj = Project(id=p_id, name=p_name.value, company_id=c_id, company_name=c_name.value,
@@ -82,7 +84,7 @@ def company_register_view(page: ft.Page):
         
         # Login and redirect
         service.current_user_id = u_id
-        page.go("/app/dashboard")
+        page.run_task(page.push_route, "/app/dashboard")
 
     # Layout
     main_container = ft.Container(
@@ -117,7 +119,7 @@ def company_register_view(page: ft.Page):
                     ),
                     ft.Container(
                         content=ft.Text("Volver al Login", color=TEXT_SECONDARY, size=13),
-                        on_click=lambda e: page.go("/login"), ink=True,
+                        on_click=lambda e: page.run_task(page.push_route, "/login"), ink=True,
                         padding=ft.padding.symmetric(vertical=10), alignment=ft.Alignment(0, 0),
                     )
                 ],

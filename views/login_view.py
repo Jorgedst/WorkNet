@@ -60,14 +60,14 @@ def login_view(page: ft.Page):
         user = service.authenticate(email, password)
         if user:
             service.current_user_id = user.id
-            page.go("/app/dashboard")
+            page.run_task(page.push_route, "/app/dashboard")
         else:
             error_text.value = "Correo o contraseña incorrectos."
             error_text.visible = True
             error_text.update()
 
     def go_register(e):
-        page.go("/register")
+        page.run_task(page.push_route, "/register")
 
     # Login form card
     login_card = ft.Container(
@@ -147,7 +147,7 @@ def login_view(page: ft.Page):
                         ft.Container(
                             content=ft.Text("Publicar Vacantes", color=ACCENT_HOVER, size=13,
                                             weight=ft.FontWeight.W_600),
-                            on_click=lambda e: page.go("/register-company"),
+                            on_click=lambda e: page.run_task(page.push_route, "/register-company"),
                             ink=True,
                             padding=ft.padding.symmetric(horizontal=8, vertical=4),
                             border_radius=6,

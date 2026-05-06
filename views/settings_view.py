@@ -125,7 +125,7 @@ def settings_content(page: ft.Page, on_view_profile=None):
     # Danger zone
     def _logout():
         service.current_user_id = None
-        page.go("/")
+        page.run_task(page.push_route, "/")
 
     danger_section = ft.Container(
         content=ft.Column(

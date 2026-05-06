@@ -100,22 +100,21 @@ def register_view(page: ft.Page):
             page.update()
             return
 
-        for u in service.users.values():
-            if u.email == email:
-                error_text.value = "Este correo ya está registrado."
-                error_text.visible = True
-                page.update()
-                return
+        if service.get_user(email) is not None:
+            error_text.value = "Este correo ya está registrado."
+            error_text.visible = True
+            page.update()
+            return
 
         avatar_colors = ["#2563eb", "#7c3aed", "#059669", "#dc2626", "#d97706", "#0891b2", "#e11d48"]
         new_user = User(
-            id=f"u{uuid.uuid4().hex[:6]}", name=name, email=email,
+            id=email, name=name, email=email,
             password=password, title=title, avatar_color=random.choice(avatar_colors),
             skills=list(selected_skills), is_online=True,
         )
         service.create_user(new_user)
-        service.current_user_id = new_user.id
-        page.go("/app/dashboard")
+        service.current_user_id = new_user.email
+        page.run_task(page.push_route, "/app/dashboard")
 
     register_card = ft.Container(
         content=ft.Column(
@@ -171,7 +170,7 @@ def register_view(page: ft.Page):
                         ft.Container(
                             content=ft.Text("Inicia sesión", color=ACCENT_PRIMARY, size=13,
                                             weight=ft.FontWeight.W_600),
-                            on_click=lambda e: page.go("/"), ink=True,
+                            on_click=lambda e: page.run_task(page.push_route, "/"), ink=True,
                             padding=ft.padding.symmetric(horizontal=8, vertical=4), border_radius=6,
                         ),
                     ],

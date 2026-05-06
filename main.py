@@ -2,14 +2,15 @@
 WorkNet - Professional Network Application
 Main entry point with routing and layout management.
 """
-
+import threading
 import flet as ft
 from utils.colors import BG_PRIMARY, BG_SECONDARY, BORDER_COLOR
 from components.sidebar import create_sidebar
 from views import (
     login_view, register_view, dashboard_content,
     network_content, companies_content, projects_content,
-    jobs_content, profile_content, settings_content, company_register_view
+    jobs_content, profile_content, settings_content, company_register_view,
+    graph_analysis_content,
 )
 from services.graph_service import GraphService
 
@@ -36,6 +37,17 @@ def main(page: ft.Page):
 
     service = GraphService()
 
+    def _warmup():
+        try:
+            from services.connection import get_driver
+            driver = get_driver()
+            with driver.session(database="005fc815") as s:
+                s.run("RETURN 1")
+        except:
+            pass
+
+    threading.Thread(target=_warmup, daemon=True).start()
+
     def get_active_route():
         """Extract the sub-route from the full route."""
         route = page.route or "/"
@@ -45,11 +57,11 @@ def main(page: ft.Page):
 
     def navigate(route_name):
         """Navigate to a sub-route within the app."""
-        page.go(f"/app/{route_name}")
+        page.run_task(page.push_route, f"/app/{route_name}")
 
     def view_profile(user_id):
         """Navigate to a user's profile."""
-        page.go(f"/app/profile/{user_id}")
+        page.run_task(page.push_route, f"/app/profile/{user_id}")
 
     def build_app_layout(content_builder):
         """Build the main app layout with sidebar and content area."""
@@ -130,6 +142,10 @@ def main(page: ft.Page):
                 page.views.append(build_app_layout(
                     lambda: settings_content(page, on_view_profile=view_profile)
                 ))
+            elif sub_route == "graph":
+                page.views.append(build_app_layout(
+                    lambda: graph_analysis_content(page, on_view_profile=view_profile)
+                ))
             elif sub_route == "profile":
                 # Extract user_id from route: /app/profile/{user_id}
                 parts = route.split("/")
@@ -151,7 +167,7 @@ def main(page: ft.Page):
         page.views.pop()
         if page.views:
             top_view = page.views[-1]
-            page.go(top_view.route)
+            page.run_task(page.push_route, top_view.route)
 
     page.on_route_change = route_change
     page.on_view_pop = view_pop

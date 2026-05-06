@@ -1,17 +1,23 @@
 """
-Service layer for graph database operations.
-Currently uses mock data. Replace methods with Neo4j Cypher queries.
-
-Neo4j Integration Guide:
-    1. pip install neo4j
-    2. from neo4j import GraphDatabase
-    3. self.driver = GraphDatabase.driver(uri, auth=(user, password))
-    4. Replace each method body with session.run(cypher_query, params)
+Service layer para WorkNet — Neo4j integrado.
+Mantiene datos mock solo para usuarios/empresas/proyectos de demostración
+que ya existen en la BD. Todo lo nuevo se persiste en Neo4j.
 """
 
+import uuid
+import random
+from datetime import datetime
 from models.models import User, Company, Project, JobOffer, Connection, WorksAt
+from services.connection import (
+    get_driver,
+    crear_usuario, crear_empresa, crear_proyecto, crear_oferta, crear_habilidad,
+    conecta_con, trabaja_en, tiene_habilidad, participa_en,
+    publica_oferta, requiere_habilidad,
+)
 
-# ── Predefined Lists ──────────────────────────────────────
+DB = "005fc815"
+
+# ── Listas predefinidas ────────────────────────────────────────────────────────
 PREDEFINED_TITLES = [
     "Software Engineer", "Senior Software Engineer", "Frontend Developer",
     "Backend Developer", "Full Stack Developer", "Data Scientist",
@@ -29,7 +35,106 @@ PREDEFINED_SKILLS = [
 ]
 
 
+# ── Helpers internos ───────────────────────────────────────────────────────────
+
+def _run(query: str, **params):
+    """Ejecuta una query de lectura y devuelve lista de records."""
+    driver = get_driver()
+    with driver.session(database=DB) as s:
+        return [r.data() for r in s.run(query, **params)]
+
+
+def _one(query: str, **params):
+    """Ejecuta una query y devuelve el primer record o None."""
+    driver = get_driver()
+    with driver.session(database=DB) as s:
+        return s.run(query, **params).single()
+
+
+def _neo4j_user_to_model(record: dict) -> User:
+    """Convierte un dict de Neo4j en un objeto User."""
+    u = record
+    name = u.get("nombre", "") or ""
+    parts = name.split()
+    initials = "".join(p[0].upper() for p in parts[:2])
+    avatar_colors = ["#2563eb", "#7c3aed", "#059669", "#dc2626",
+                     "#d97706", "#0891b2", "#e11d48", "#4f46e5"]
+    color = avatar_colors[hash(u.get("email", "")) % len(avatar_colors)]
+    return User(
+        id=u.get("email", ""),          # usamos email como id
+        name=name,
+        email=u.get("email", ""),
+        password=u.get("password", ""),
+        title=u.get("cargo", ""),
+        bio=u.get("bio", ""),
+        avatar_color=color,
+        initials=initials,
+        location=u.get("ciudad", ""),
+        skills=u.get("skills", []),
+        is_online=True,
+    )
+
+
+def _neo4j_empresa_to_model(record: dict) -> Company:
+    e = record
+    logo_colors = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#0891b2", "#4f46e5"]
+    color = logo_colors[hash(e.get("nombre", "")) % len(logo_colors)]
+    name = e.get("nombre", "")
+    return Company(
+        id=e.get("nombre", ""),         # usamos nombre como id
+        name=name,
+        description=e.get("descripcion", ""),
+        industry=e.get("sector", ""),
+        logo_color=color,
+        initials=name[0].upper() if name else "?",
+        location=e.get("ciudad", ""),
+        employee_count=e.get("employee_count", 0),
+        founded_year=e.get("founded_year", 0),
+    )
+
+
+def _neo4j_proyecto_to_model(record: dict) -> Project:
+    p = record
+    techs = p.get("tecnologias", "")
+    if isinstance(techs, str):
+        techs = [t.strip() for t in techs.split(",") if t.strip()]
+    return Project(
+        id=p.get("nombre", ""),
+        name=p.get("nombre", ""),
+        company_id=p.get("empresa_nombre", ""),
+        company_name=p.get("empresa_nombre", ""),
+        description=p.get("descripcion", ""),
+        status="Active",
+        technologies=techs,
+    )
+
+
+def _neo4j_oferta_to_model(record: dict, empresa_nombre: str = "") -> JobOffer:
+    o = record
+    skills = o.get("habilidades", [])
+    if isinstance(skills, str):
+        skills = [s.strip() for s in skills.split(",") if s.strip()]
+    titulo = o.get("titulo", "")
+    return JobOffer(
+        id=titulo,
+        title=titulo,
+        company_id=empresa_nombre,
+        company_name=empresa_nombre,
+        description=o.get("descripcion", ""),
+        location=o.get("modalidad", ""),
+        salary_range=o.get("salario", "A convenir"),
+        job_type="Full-time",
+        required_skills=skills,
+        posted_date="",
+        is_active=True,
+        experience_level="",
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 class GraphService:
+    """Singleton que conecta las vistas con Neo4j."""
+
     _instance = None
 
     def __new__(cls):
@@ -42,423 +147,543 @@ class GraphService:
         if self._initialized:
             return
         self._initialized = True
-        self._init_mock_data()
+        self._init_local_state()
 
-    def _init_mock_data(self):
-        self.current_user_id = "u1"
-
-        self.users = {
-            "u1": User(id="u1", name="Sarah López", email="sarah@worknet.com", password="admin123",
-                       title="Senior Software Engineer", bio="Passionate about building scalable systems.",
-                       avatar_color="#2563eb", location="Bogotá, Colombia",
-                       skills=["Python", "React", "Docker", "AWS"], is_online=True),
-            "u2": User(id="u2", name="Michael Chen", email="michael@worknet.com", password="1234",
-                       title="Senior Software Engineer", avatar_color="#7c3aed",
-                       location="San Francisco, USA",
-                       skills=["JavaScript", "React", "Python", "AI", "Node.js"], is_online=True),
-            "u3": User(id="u3", name="Robert Smith", email="robert@worknet.com", password="1234",
-                       title="Full Stack Developer", avatar_color="#059669",
-                       location="New York, USA",
-                       skills=["JavaScript", "React", "Python", "Node.js"], is_online=False),
-            "u4": User(id="u4", name="Robert Chen", email="rchen@worknet.com", password="1234",
-                       title="Backend Developer", avatar_color="#dc2626",
-                       location="Austin, USA",
-                       skills=["JavaScript", "React", "Python", "B2B", "AI", "Node.js"], is_online=True),
-            "u5": User(id="u5", name="Julia Lee", email="julia@worknet.com", password="1234",
-                       title="Frontend Developer", avatar_color="#d97706",
-                       location="London, UK",
-                       skills=["JavaScript", "React", "TypeScript", "CSS", "Figma"], is_online=False),
-            "u6": User(id="u6", name="Alice Wong", email="alice@worknet.com", password="1234",
-                       title="Data Scientist", avatar_color="#0891b2",
-                       location="Toronto, Canada",
-                       skills=["Python", "Machine Learning", "Data Science", "SQL"], is_online=True),
-            "u7": User(id="u7", name="Carlos Méndez", email="carlos@worknet.com", password="1234",
-                       title="DevOps Engineer", avatar_color="#4f46e5",
-                       location="Madrid, Spain",
-                       skills=["Docker", "AWS", "DevOps", "Python", "Go"], is_online=False),
-            "u8": User(id="u8", name="Diana Torres", email="diana@worknet.com", password="1234",
-                       title="Frontend Developer", avatar_color="#e11d48",
-                       location="Medellín, Colombia",
-                       skills=["React", "TypeScript", "CSS", "Figma", "Node.js"], is_online=True),
+    def _init_local_state(self):
+        """Estado local mínimo: solo sesión y aplicaciones."""
+        self.current_user_id = None   # email del usuario logueado
+        self._cache = {
+            "all_users": None,
+            "all_companies": None,
+            "all_jobs": None,
+            "all_projects": None,
+            "network_graph_data": None
         }
 
-        self.companies = {
-            "c1": Company(id="c1", name="TechCorp", description="Leading technology solutions provider.",
-                          industry="Technology", logo_color="#2563eb", location="San Francisco, USA",
-                          employee_count=5000, founded_year=2010),
-            "c2": Company(id="c2", name="InnovateSolutions", description="AI-driven innovation company.",
-                          industry="AI & Machine Learning", logo_color="#7c3aed", location="New York, USA",
-                          employee_count=1200, founded_year=2015),
-            "c3": Company(id="c3", name="Vertex Inc.", description="Cloud infrastructure and services.",
-                          industry="Cloud Computing", logo_color="#059669", location="Austin, USA",
-                          employee_count=3000, founded_year=2012),
-            "c4": Company(id="c4", name="DataFlow", description="Big data analytics platform.",
-                          industry="Data Analytics", logo_color="#d97706", location="London, UK",
-                          employee_count=800, founded_year=2018),
-        }
+    def _invalidate_cache(self, keys=None):
+        """Limpia el caché para forzar la recarga desde Neo4j."""
+        if keys is None:
+            keys = self._cache.keys()
+        for k in keys:
+            self._cache[k] = None
 
-        # Projects published by companies
-        self.projects = {
-            "p1": Project(id="p1", name="AI Recommendation Engine",
-                          company_id="c1", company_name="TechCorp",
-                          description="ML-powered recommendation system for e-commerce.",
-                          status="Active", technologies=["Python", "Machine Learning", "Docker"]),
-            "p2": Project(id="p2", name="Cloud Migration Platform",
-                          company_id="c3", company_name="Vertex Inc.",
-                          description="Enterprise cloud migration automation tools.",
-                          status="Active", technologies=["AWS", "Docker", "DevOps", "Go"]),
-            "p3": Project(id="p3", name="Mobile App Redesign",
-                          company_id="c1", company_name="TechCorp",
-                          description="Complete UI/UX overhaul of flagship mobile app.",
-                          status="Active", technologies=["React", "TypeScript", "Figma"]),
-            "p4": Project(id="p4", name="Graph Analytics Platform",
-                          company_id="c2", company_name="InnovateSolutions",
-                          description="Network analysis and visualization using Neo4j.",
-                          status="Active", technologies=["Neo4j", "Python", "GraphQL", "React"]),
-            "p5": Project(id="p5", name="Data Pipeline Modernization",
-                          company_id="c4", company_name="DataFlow",
-                          description="Rebuilding ETL pipelines with modern streaming tech.",
-                          status="Active", technologies=["Python", "SQL", "AWS", "Docker"]),
-        }
+    # ── Autenticación ──────────────────────────────────────────────────────────
 
-        # Vacantes linked to projects and companies
-        self.jobs = {
-            "j1": JobOffer(id="j1", title="Senior Python Developer",
-                           company_id="c1", company_name="TechCorp",
-                           project_id="p1", project_name="AI Recommendation Engine",
-                           description="Build ML recommendation models.",
-                           location="San Francisco (Remote)", salary_range="$120k-$160k",
-                           job_type="Full-time", required_skills=["Python", "Machine Learning", "Docker"],
-                           posted_date="2026-04-28", experience_level="Senior"),
-            "j2": JobOffer(id="j2", title="ML Engineer",
-                           company_id="c1", company_name="TechCorp",
-                           project_id="p1", project_name="AI Recommendation Engine",
-                           description="Develop and deploy ML pipelines.",
-                           location="San Francisco (Hybrid)", salary_range="$130k-$170k",
-                           job_type="Full-time", required_skills=["Python", "AI", "Machine Learning"],
-                           posted_date="2026-05-01", experience_level="Mid"),
-            "j3": JobOffer(id="j3", title="React Frontend Engineer",
-                           company_id="c2", company_name="InnovateSolutions",
-                           project_id="p4", project_name="Graph Analytics Platform",
-                           description="Build interactive graph visualization UIs.",
-                           location="New York (Hybrid)", salary_range="$100k-$140k",
-                           job_type="Full-time", required_skills=["React", "TypeScript", "GraphQL"],
-                           posted_date="2026-05-01", experience_level="Mid"),
-            "j4": JobOffer(id="j4", title="DevOps Engineer",
-                           company_id="c3", company_name="Vertex Inc.",
-                           project_id="p2", project_name="Cloud Migration Platform",
-                           description="Manage CI/CD and cloud infrastructure.",
-                           location="Austin, USA", salary_range="$115k-$155k",
-                           job_type="Full-time", required_skills=["Docker", "AWS", "DevOps", "Go"],
-                           posted_date="2026-05-02", experience_level="Mid"),
-            "j5": JobOffer(id="j5", title="Cloud Architect",
-                           company_id="c3", company_name="Vertex Inc.",
-                           project_id="p2", project_name="Cloud Migration Platform",
-                           description="Design scalable cloud architectures.",
-                           location="Austin (Remote)", salary_range="$140k-$180k",
-                           job_type="Full-time", required_skills=["AWS", "Docker", "DevOps"],
-                           posted_date="2026-04-30", experience_level="Senior"),
-            "j6": JobOffer(id="j6", title="UI/UX Designer",
-                           company_id="c1", company_name="TechCorp",
-                           project_id="p3", project_name="Mobile App Redesign",
-                           description="Lead the redesign of mobile interfaces.",
-                           location="San Francisco (Remote)", salary_range="$90k-$130k",
-                           job_type="Full-time", required_skills=["Figma", "CSS", "React"],
-                           posted_date="2026-05-03", experience_level="Mid"),
-            "j7": JobOffer(id="j7", title="Data Engineer",
-                           company_id="c4", company_name="DataFlow",
-                           project_id="p5", project_name="Data Pipeline Modernization",
-                           description="Build modern data pipelines.",
-                           location="London (Remote)", salary_range="$100k-$140k",
-                           job_type="Full-time", required_skills=["Python", "SQL", "AWS", "Docker"],
-                           posted_date="2026-04-25", experience_level="Senior"),
-        }
-
-        # Relación: CONECTA_CON
-        self.connections = [
-            Connection("u1", "u2", "professional", "2025-06-15", "accepted"),
-            Connection("u1", "u3", "colleague", "2025-08-20", "accepted"),
-            Connection("u1", "u6", "professional", "2025-11-01", "accepted"),
-            Connection("u1", "u8", "colleague", "2026-01-10", "accepted"),
-            Connection("u2", "u3", "professional", "2025-05-10", "accepted"),
-            Connection("u2", "u4", "colleague", "2025-09-12", "accepted"),
-            Connection("u3", "u5", "professional", "2025-07-22", "accepted"),
-            Connection("u4", "u5", "colleague", "2025-10-05", "accepted"),
-            Connection("u5", "u6", "professional", "2026-01-15", "accepted"),
-            Connection("u6", "u7", "colleague", "2025-12-01", "accepted"),
-            Connection("u7", "u8", "professional", "2026-02-14", "accepted"),
-        ]
-
-        # Relación: TRABAJA_EN
-        self.works_at = [
-            WorksAt("u1", "c1", "Senior Engineer", "2023-01-15", is_current=True),
-            WorksAt("u2", "c1", "Software Engineer", "2022-06-01", is_current=True),
-            WorksAt("u3", "c2", "Lead Developer", "2024-03-01", is_current=True),
-            WorksAt("u4", "c2", "Software Engineer", "2023-08-15", is_current=True),
-            WorksAt("u5", "c3", "Senior Developer", "2022-11-01", is_current=True),
-            WorksAt("u6", "c4", "Data Scientist", "2024-01-10", is_current=True),
-            WorksAt("u7", "c3", "DevOps Engineer", "2023-05-20", is_current=True),
-            WorksAt("u8", "c1", "Frontend Developer", "2024-06-01", is_current=True),
-        ]
-
-        # Relación: PARTICIPA_EN (users participating in projects)
-        self.participations = [
-            {"user_id": "u1", "project_id": "p1", "role": "Lead"},
-            {"user_id": "u2", "project_id": "p1", "role": "Member"},
-            {"user_id": "u6", "project_id": "p1", "role": "Member"},
-            {"user_id": "u7", "project_id": "p2", "role": "Lead"},
-            {"user_id": "u5", "project_id": "p2", "role": "Member"},
-            {"user_id": "u8", "project_id": "p3", "role": "Lead"},
-            {"user_id": "u3", "project_id": "p3", "role": "Member"},
-            {"user_id": "u6", "project_id": "p4", "role": "Lead"},
-            {"user_id": "u1", "project_id": "p4", "role": "Member"},
-            {"user_id": "u6", "project_id": "p5", "role": "Member"},
-        ]
-
-        # Applications tracking
-        self.applications = []  # {"user_id": ..., "job_id": ...}
-
-    # ── Authentication ─────────────────────────────────────
     def authenticate(self, email: str, password: str):
-        """TODO Neo4j: MATCH (u:User {email: $email, password: $password}) RETURN u"""
-        for user in self.users.values():
-            if user.email == email and user.password == password:
-                self.current_user_id = user.id
-                return user
+        rec = _one(
+            "MATCH (u:Usuario {email: $email, password: $password}) "
+            "RETURN u",
+            email=email, password=password,
+        )
+        if rec:
+            u_data = dict(rec["u"])
+            # cargar habilidades
+            skills_rec = _run(
+                "MATCH (u:Usuario {email: $email})-[:TIENE_HABILIDAD]->(h:Habilidad) "
+                "RETURN h.nombre AS nombre",
+                email=email,
+            )
+            u_data["skills"] = [r["nombre"] for r in skills_rec]
+            user = _neo4j_user_to_model(u_data)
+            self.current_user_id = user.id
+            return user
         return None
 
-    def get_current_user(self):
-        return self.users.get(self.current_user_id)
+    def get_current_user(self) -> User:
+        if not self.current_user_id:
+            return None
+        return self.get_user(self.current_user_id)
 
     def get_admin_company(self, user_id: str):
-        """Check if user is a company admin and return the company if so."""
-        for w in self.works_at:
-            if w.user_id == user_id and w.role == "Administrador" and w.is_current:
-                return self.get_company(w.company_id)
+        """Devuelve la empresa si el usuario es Administrador."""
+        rec = _one(
+            "MATCH (u:Usuario {email: $email})-[:TRABAJA_EN]->(e:Empresa) "
+            "RETURN e",
+            email=user_id,
+        )
+        if rec:
+            return _neo4j_empresa_to_model(dict(rec["e"]))
         return None
 
-    # ── User CRUD ──────────────────────────────────────────
-    def get_all_users(self):
-        return list(self.users.values())
+    # ── Usuarios ───────────────────────────────────────────────────────────────
 
-    def get_user(self, user_id: str):
-        return self.users.get(user_id)
+    def get_all_users(self) -> list:
+        if self._cache["all_users"] is not None:
+            return self._cache["all_users"]
+        rows = _run(
+            "MATCH (u:Usuario) "
+            "OPTIONAL MATCH (u)-[:TIENE_HABILIDAD]->(h:Habilidad) "
+            "RETURN u, collect(h.nombre) AS skills"
+        )
+        users = []
+        for r in rows:
+            u_data = dict(r["u"])
+            u_data["skills"] = r["skills"]
+            users.append(_neo4j_user_to_model(u_data))
+        self._cache["all_users"] = users
+        return users
+
+    def get_user(self, user_id: str) -> User:
+        rec = _one(
+            "MATCH (u:Usuario {email: $email}) RETURN u",
+            email=user_id,
+        )
+        if not rec:
+            return None
+        u_data = dict(rec["u"])
+        skills_rec = _run(
+            "MATCH (u:Usuario {email: $email})-[:TIENE_HABILIDAD]->(h:Habilidad) "
+            "RETURN h.nombre AS nombre",
+            email=user_id,
+        )
+        u_data["skills"] = [r["nombre"] for r in skills_rec]
+        return _neo4j_user_to_model(u_data)
 
     def create_user(self, user: User):
-        self.users[user.id] = user
+        driver = get_driver()
+        crear_usuario(driver, user.email, user.name, user.title, user.location or "")
+        # Guardar password
+        driver.execute_query(
+            "MATCH (u:Usuario {email: $email}) SET u.password = $password",
+            email=user.email, password=user.password,
+            database_=DB,
+        )
+        # Guardar habilidades
+        for skill in user.skills:
+            # Asegurarse de que la habilidad exista
+            driver.execute_query(
+                "MERGE (h:Habilidad {nombre: $nombre}) "
+                "ON CREATE SET h.categoria = 'General'",
+                nombre=skill, database_=DB,
+            )
+            tiene_habilidad(driver, user.email, skill)
+        self._invalidate_cache(["all_users", "network_graph_data"])
         return user
 
     def update_user(self, user: User):
-        self.users[user.id] = user
+        driver = get_driver()
+        driver.execute_query(
+            "MATCH (u:Usuario {email: $email}) "
+            "SET u.nombre = $nombre, u.ciudad = $ciudad",
+            email=user.email, nombre=user.name, ciudad=user.location or "",
+            database_=DB,
+        )
+        # Actualizar habilidades: borrar las viejas y poner las nuevas
+        driver.execute_query(
+            "MATCH (u:Usuario {email: $email})-[r:TIENE_HABILIDAD]->() DELETE r",
+            email=user.email, database_=DB,
+        )
+        for skill in user.skills:
+            driver.execute_query(
+                "MERGE (h:Habilidad {nombre: $nombre}) "
+                "ON CREATE SET h.categoria = 'General'",
+                nombre=skill, database_=DB,
+            )
+            tiene_habilidad(driver, user.email, skill)
+        self._invalidate_cache(["all_users"])
         return user
 
-    # ── Connection Operations ──────────────────────────────
-    def get_connections(self, user_id: str):
-        """TODO Neo4j: MATCH (u:User {id:$id})-[:CONECTA_CON]-(other:User) RETURN other"""
-        connected_ids = []
-        for c in self.connections:
-            if c.status != "accepted":
-                continue
-            if c.user_id_1 == user_id:
-                connected_ids.append(c.user_id_2)
-            elif c.user_id_2 == user_id:
-                connected_ids.append(c.user_id_1)
-        return [self.users[uid] for uid in connected_ids if uid in self.users]
+    # ── Conexiones ─────────────────────────────────────────────────────────────
 
-    def is_connected(self, user_id_1: str, user_id_2: str):
-        for c in self.connections:
-            if c.status == "accepted":
-                if (c.user_id_1 == user_id_1 and c.user_id_2 == user_id_2) or \
-                   (c.user_id_1 == user_id_2 and c.user_id_2 == user_id_1):
-                    return True
-        return False
+    def get_connections(self, user_id: str) -> list:
+        rows = _run(
+            "MATCH (u:Usuario {email: $email})-[:CONECTA_CON]-(otro:Usuario) "
+            "OPTIONAL MATCH (otro)-[:TIENE_HABILIDAD]->(h:Habilidad) "
+            "RETURN otro, collect(h.nombre) AS skills",
+            email=user_id,
+        )
+        users = []
+        for r in rows:
+            u_data = dict(r["otro"])
+            u_data["skills"] = r["skills"]
+            users.append(_neo4j_user_to_model(u_data))
+        return users
+
+    def is_connected(self, user_id_1: str, user_id_2: str) -> bool:
+        rec = _one(
+            "MATCH (a:Usuario {email: $e1})-[:CONECTA_CON]-(b:Usuario {email: $e2}) "
+            "RETURN count(*) AS n",
+            e1=user_id_1, e2=user_id_2,
+        )
+        return rec and rec["n"] > 0
 
     def send_connection_request(self, user_id_1: str, user_id_2: str):
-        """TODO Neo4j: CREATE (u1)-[:CONECTA_CON {status: 'pending'}]->(u2)"""
-        # Check if already connected or pending
-        for c in self.connections:
-            if (c.user_id_1 == user_id_1 and c.user_id_2 == user_id_2) or \
-               (c.user_id_1 == user_id_2 and c.user_id_2 == user_id_1):
-                return False
-        from datetime import datetime
-        self.connections.append(
-            Connection(user_id_1, user_id_2, "professional", datetime.now().strftime("%Y-%m-%d"), "pending")
+        if self.is_connected(user_id_1, user_id_2):
+            return False
+        driver = get_driver()
+        conecta_con(driver, user_id_1, user_id_2)
+        self._invalidate_cache(["network_graph_data"])
+        return True
+
+    def get_common_connections(self, user_id_1: str, user_id_2: str) -> list:
+        rows = _run(
+            "MATCH (a:Usuario {email: $e1})-[:CONECTA_CON]->(comun:Usuario)"
+            "<-[:CONECTA_CON]-(b:Usuario {email: $e2}) "
+            "RETURN comun",
+            e1=user_id_1, e2=user_id_2,
+        )
+        return [_neo4j_user_to_model(dict(r["comun"])) for r in rows]
+
+    # ── Empresas ───────────────────────────────────────────────────────────────
+
+    def get_all_companies(self) -> list:
+        if self._cache["all_companies"] is not None:
+            return self._cache["all_companies"]
+        rows = _run(
+            "MATCH (e:Empresa) "
+            "OPTIONAL MATCH (u:Usuario)-[:TRABAJA_EN]->(e) "
+            "RETURN e, count(u) AS total"
+        )
+        companies = []
+        for r in rows:
+            e_data = dict(r["e"])
+            c = _neo4j_empresa_to_model(e_data)
+            c.employee_count = r["total"]
+            companies.append(c)
+        self._cache["all_companies"] = companies
+        return companies
+
+    def get_company(self, company_id: str) -> Company:
+        rec = _one(
+            "MATCH (e:Empresa {nombre: $nombre}) RETURN e",
+            nombre=company_id,
+        )
+        if rec:
+            return _neo4j_empresa_to_model(dict(rec["e"]))
+        return None
+
+    def create_company(self, company: Company):
+        driver = get_driver()
+        crear_empresa(driver, company.name, company.location, company.industry)
+        self._invalidate_cache(["all_companies", "network_graph_data"])
+        return company
+
+    def get_company_employees(self, company_id: str) -> list:
+        rows = _run(
+            "MATCH (u:Usuario)-[:TRABAJA_EN]->(e:Empresa {nombre: $nombre}) "
+            "OPTIONAL MATCH (u)-[:TIENE_HABILIDAD]->(h:Habilidad) "
+            "RETURN u, collect(h.nombre) AS skills",
+            nombre=company_id,
+        )
+        users = []
+        for r in rows:
+            u_data = dict(r["u"])
+            u_data["skills"] = r["skills"]
+            users.append(_neo4j_user_to_model(u_data))
+        return users
+
+    def get_user_company(self, user_id: str) -> Company:
+        rec = _one(
+            "MATCH (u:Usuario {email: $email})-[:TRABAJA_EN]->(e:Empresa) "
+            "RETURN e",
+            email=user_id,
+        )
+        if rec:
+            return _neo4j_empresa_to_model(dict(rec["e"]))
+        return None
+
+    # ── Proyectos ──────────────────────────────────────────────────────────────
+
+    def get_all_projects(self) -> list:
+        if self._cache["all_projects"] is not None:
+            return self._cache["all_projects"]
+        rows = _run(
+            "MATCH (p:Proyecto) "
+            "OPTIONAL MATCH (e:Empresa)-[:PUBLICA]->(o:Oferta)<-[:PERTENECE_A]-(p) "
+            "OPTIONAL MATCH (e2:Empresa)-[:PUBLICA_PROYECTO]->(p) "
+            "RETURN p, coalesce(e2.nombre, e.nombre, '') AS empresa_nombre"
+        )
+        projs = [_neo4j_proyecto_to_model({**dict(r["p"]), "empresa_nombre": r["empresa_nombre"]})
+                for r in rows]
+        self._cache["all_projects"] = projs
+        return projs
+
+    def get_project(self, project_id: str) -> Project:
+        rec = _one(
+            "MATCH (p:Proyecto {nombre: $nombre}) RETURN p",
+            nombre=project_id,
+        )
+        if rec:
+            return _neo4j_proyecto_to_model(dict(rec["p"]))
+        return None
+
+    def get_company_projects(self, company_id: str) -> list:
+        """Proyectos cuyas ofertas fueron publicadas por la empresa."""
+        rows = _run(
+            "MATCH (e:Empresa {nombre: $nombre})-[:PUBLICA]->(o:Oferta) "
+            "MATCH (p:Proyecto) WHERE p.nombre = o.titulo OR "
+            "      exists((e)-[:PUBLICA]->(o)) "
+            "RETURN DISTINCT p, e.nombre AS empresa_nombre "
+            "LIMIT 20",
+            nombre=company_id,
+        )
+        # Fallback: traer todos los proyectos si la empresa no tiene relación directa
+        if not rows:
+            rows = _run("MATCH (p:Proyecto) RETURN p, '' AS empresa_nombre LIMIT 10")
+        return [_neo4j_proyecto_to_model({**dict(r["p"]), "empresa_nombre": r.get("empresa_nombre", "")})
+                for r in rows]
+
+    def get_user_projects(self, user_id: str) -> list:
+        rows = _run(
+            "MATCH (u:Usuario {email: $email})-[:PARTICIPA_EN]->(p:Proyecto) "
+            "RETURN p",
+            email=user_id,
+        )
+        return [_neo4j_proyecto_to_model(dict(r["p"])) for r in rows]
+
+    def get_project_members(self, project_id: str) -> list:
+        rows = _run(
+            "MATCH (u:Usuario)-[:PARTICIPA_EN]->(p:Proyecto {nombre: $nombre}) "
+            "OPTIONAL MATCH (u)-[:TIENE_HABILIDAD]->(h:Habilidad) "
+            "RETURN u, collect(h.nombre) AS skills",
+            nombre=project_id,
+        )
+        users = []
+        for r in rows:
+            u_data = dict(r["u"])
+            u_data["skills"] = r["skills"]
+            users.append(_neo4j_user_to_model(u_data))
+        return users
+
+    def create_project(self, project: Project):
+        driver = get_driver()
+        techs = ", ".join(project.technologies) if project.technologies else ""
+        crear_proyecto(driver, project.description, project.name, techs)
+        if project.company_name:
+            driver.execute_query(
+                "MATCH (e:Empresa {nombre: $empresa}) MATCH (p:Proyecto {nombre: $proyecto}) MERGE (e)-[:PUBLICA_PROYECTO]->(p)",
+                empresa=project.company_name, proyecto=project.name, database_=DB
+            )
+        self._invalidate_cache(["all_projects"])
+        return project
+
+    # ── Ofertas ────────────────────────────────────────────────────────────────
+
+    def get_all_jobs(self) -> list:
+        if self._cache["all_jobs"] is not None:
+            return self._cache["all_jobs"]
+        rows = _run(
+            "MATCH (e:Empresa)-[:PUBLICA]->(o:Oferta) "
+            "OPTIONAL MATCH (p:Proyecto)-[:PERTENECE_A]->(o) "
+            "OPTIONAL MATCH (o)-[:REQUIERE]->(h:Habilidad) "
+            "RETURN o, e.nombre AS empresa_nombre, p.nombre AS proyecto_nombre, collect(h.nombre) AS habilidades"
+        )
+        jobs = []
+        for r in rows:
+            o_data = dict(r["o"])
+            o_data["habilidades"] = r["habilidades"]
+            job = _neo4j_oferta_to_model(o_data, r["empresa_nombre"])
+            if r.get("proyecto_nombre"):
+                job.project_id = r["proyecto_nombre"]
+                job.project_name = r["proyecto_nombre"]
+            jobs.append(job)
+        self._cache["all_jobs"] = jobs
+        return jobs
+
+    def get_job(self, job_id: str) -> JobOffer:
+        rec = _one(
+            "MATCH (e:Empresa)-[:PUBLICA]->(o:Oferta {titulo: $titulo}) "
+            "OPTIONAL MATCH (p:Proyecto)-[:PERTENECE_A]->(o) "
+            "OPTIONAL MATCH (o)-[:REQUIERE]->(h:Habilidad) "
+            "RETURN o, e.nombre AS empresa_nombre, p.nombre AS proyecto_nombre, collect(h.nombre) AS habilidades",
+            titulo=job_id,
+        )
+        if rec:
+            o_data = dict(rec["o"])
+            o_data["habilidades"] = rec["habilidades"]
+            job = _neo4j_oferta_to_model(o_data, rec["empresa_nombre"])
+            if rec.get("proyecto_nombre"):
+                job.project_id = rec["proyecto_nombre"]
+                job.project_name = rec["proyecto_nombre"]
+            return job
+        return None
+
+    def get_project_jobs(self, project_id: str) -> list:
+        rows = _run(
+            "MATCH (p:Proyecto {nombre: $proyecto})-[:PERTENECE_A]->(o:Oferta) "
+            "MATCH (e:Empresa)-[:PUBLICA]->(o) "
+            "OPTIONAL MATCH (o)-[:REQUIERE]->(h:Habilidad) "
+            "RETURN o, e.nombre AS empresa_nombre, collect(h.nombre) AS habilidades",
+            proyecto=project_id
+        )
+        jobs = []
+        for r in rows:
+            o_data = dict(r["o"])
+            o_data["habilidades"] = r["habilidades"]
+            job = _neo4j_oferta_to_model(o_data, r["empresa_nombre"])
+            job.project_id = project_id
+            job.project_name = project_id
+            jobs.append(job)
+        return jobs
+
+    def get_company_jobs(self, company_id: str) -> list:
+        rows = _run(
+            "MATCH (e:Empresa {nombre: $nombre})-[:PUBLICA]->(o:Oferta) "
+            "OPTIONAL MATCH (o)-[:REQUIERE]->(h:Habilidad) "
+            "RETURN o, e.nombre AS empresa_nombre, collect(h.nombre) AS habilidades",
+            nombre=company_id,
+        )
+        jobs = []
+        for r in rows:
+            o_data = dict(r["o"])
+            o_data["habilidades"] = r["habilidades"]
+            jobs.append(_neo4j_oferta_to_model(o_data, r["empresa_nombre"]))
+        return jobs
+
+    def create_job(self, job: JobOffer):
+        driver = get_driver()
+        crear_oferta(driver, job.title, job.salary_range or "A convenir", job.location or "")
+        if job.company_name:
+            publica_oferta(driver, job.company_name, job.title)
+        if job.project_name:
+            driver.execute_query(
+                "MATCH (p:Proyecto {nombre: $proyecto}) MATCH (o:Oferta {titulo: $oferta}) MERGE (p)-[:PERTENECE_A]->(o)",
+                proyecto=job.project_name, oferta=job.title, database_=DB
+            )
+        for skill in job.required_skills:
+            driver.execute_query(
+                "MERGE (h:Habilidad {nombre: $nombre}) ON CREATE SET h.categoria = 'General'",
+                nombre=skill, database_=DB,
+            )
+            requiere_habilidad(driver, job.title, skill)
+        self._invalidate_cache(["all_jobs"])
+        return job
+
+    def apply_to_job(self, user_id: str, job_id: str):
+        driver = get_driver()
+        driver.execute_query(
+            "MATCH (u:Usuario {email: $email}) MATCH (o:Oferta {titulo: $titulo}) MERGE (u)-[:APLICA_A]->(o)",
+            email=user_id, titulo=job_id, database_=DB
         )
         return True
 
-    def get_common_connections(self, user_id_1: str, user_id_2: str):
-        """TODO Neo4j: MATCH (u1)-[:CONECTA_CON]-(common)-[:CONECTA_CON]-(u2) RETURN common"""
-        conns1 = {u.id for u in self.get_connections(user_id_1)}
-        conns2 = {u.id for u in self.get_connections(user_id_2)}
-        common_ids = conns1 & conns2
-        return [self.users[uid] for uid in common_ids if uid in self.users]
+    def has_applied(self, user_id: str, job_id: str) -> bool:
+        rec = _one(
+            "MATCH (u:Usuario {email: $email})-[:APLICA_A]->(o:Oferta {titulo: $titulo}) RETURN count(o) as n",
+            email=user_id, titulo=job_id
+        )
+        return rec and rec["n"] > 0
 
-    # ── Company Operations ─────────────────────────────────
-    def get_all_companies(self):
-        return list(self.companies.values())
+    def get_user_applications(self, user_id: str) -> list:
+        rows = _run(
+            "MATCH (u:Usuario {email: $email})-[:APLICA_A]->(o:Oferta) RETURN o.titulo as job_id",
+            email=user_id
+        )
+        return [r["job_id"] for r in rows]
 
-    def get_company(self, company_id: str):
-        return self.companies.get(company_id)
+    # ── Análisis de grafos ─────────────────────────────────────────────────────
 
-    def create_company(self, company: Company):
-        """TODO Neo4j: CREATE (c:Company {props}) RETURN c"""
-        self.companies[company.id] = company
-        return company
+    def get_users_with_similar_skills(self, user_id: str) -> list:
+        rows = _run(
+            "MATCH (u:Usuario {email: $email})-[:TIENE_HABILIDAD]->(h:Habilidad)"
+            "<-[:TIENE_HABILIDAD]-(otro:Usuario) "
+            "WHERE otro.email <> $email "
+            "WITH otro, collect(h.nombre) AS shared, count(h) AS total "
+            "ORDER BY total DESC "
+            "RETURN otro, shared, total",
+            email=user_id,
+        )
+        result = []
+        for r in rows:
+            u_data = dict(r["otro"])
+            u_data["skills"] = r["shared"]
+            other = _neo4j_user_to_model(u_data)
+            result.append((other, r["total"], r["shared"]))
+        return result
 
-    def get_company_employees(self, company_id: str):
-        """TODO Neo4j: MATCH (u:User)-[:TRABAJA_EN]->(c:Company {id:$id}) RETURN u"""
-        emp_ids = [w.user_id for w in self.works_at if w.company_id == company_id and w.is_current]
-        return [self.users[uid] for uid in emp_ids if uid in self.users]
+    def get_recommendations(self, user_id: str) -> list:
+        connected = {u.id for u in self.get_connections(user_id)} | {user_id}
+        rows = _run(
+            "MATCH (u:Usuario {email: $email})-[:TIENE_HABILIDAD]->(h:Habilidad)"
+            "<-[:TIENE_HABILIDAD]-(rec:Usuario) "
+            "WHERE rec.email <> $email "
+            "WITH rec, collect(DISTINCT h.nombre) AS shared, count(DISTINCT h) AS score "
+            "ORDER BY score DESC "
+            "RETURN rec, shared, score",
+            email=user_id,
+        )
+        result = []
+        for r in rows:
+            u_data = dict(r["rec"])
+            u_data["skills"] = r["shared"]
+            other = _neo4j_user_to_model(u_data)
+            if other.id not in connected:
+                result.append((other, r["score"], r["shared"], []))
+        return result
 
-    def get_user_company(self, user_id: str):
-        for w in self.works_at:
-            if w.user_id == user_id and w.is_current:
-                return self.companies.get(w.company_id)
-        return None
-
-    def get_company_projects(self, company_id: str):
-        """TODO Neo4j: MATCH (c:Company {id:$id})-[:PUBLICA]->(p:Project) RETURN p"""
-        return [p for p in self.projects.values() if p.company_id == company_id]
-
-    def get_company_jobs(self, company_id: str):
-        return [j for j in self.jobs.values() if j.company_id == company_id and j.is_active]
-
-    # ── Job/Vacancy Operations ─────────────────────────────
-    def get_all_jobs(self):
-        return list(self.jobs.values())
-
-    def get_job(self, job_id: str):
-        return self.jobs.get(job_id)
-
-    def get_project_jobs(self, project_id: str):
-        """TODO Neo4j: MATCH (p:Project {id:$id})<-[:PERTENECE_A]-(j:Oferta) RETURN j"""
-        return [j for j in self.jobs.values() if j.project_id == project_id and j.is_active]
-
-    def apply_to_job(self, user_id: str, job_id: str):
-        """TODO Neo4j: CREATE (u:User {id:$uid})-[:APLICA_A]->(j:Oferta {id:$jid})"""
-        self.applications.append({"user_id": user_id, "job_id": job_id})
-        return True
-
-    def has_applied(self, user_id: str, job_id: str):
-        return any(a["user_id"] == user_id and a["job_id"] == job_id for a in self.applications)
-
-    def create_job(self, job: JobOffer):
-        self.jobs[job.id] = job
-        return job
-
-    # ── Project Operations ─────────────────────────────────
-    def get_all_projects(self):
-        return list(self.projects.values())
-
-    def get_project(self, project_id: str):
-        return self.projects.get(project_id)
-
-    def get_project_members(self, project_id: str):
-        member_ids = [p["user_id"] for p in self.participations if p["project_id"] == project_id]
-        return [self.users[uid] for uid in member_ids if uid in self.users]
-
-    def get_user_projects(self, user_id: str):
-        proj_ids = [p["project_id"] for p in self.participations if p["user_id"] == user_id]
-        return [self.projects[pid] for pid in proj_ids if pid in self.projects]
-
-    def create_project(self, project: Project):
-        self.projects[project.id] = project
-        return project
-
-    # ── Graph Analysis Queries ─────────────────────────────
-    def get_users_with_similar_skills(self, user_id: str):
-        """
-        TODO Neo4j: MATCH (u1:User {id:$id})-[:TIENE_HABILIDAD]->(s:Skill)<-[:TIENE_HABILIDAD]-(u2:User)
-                    WHERE u1 <> u2 RETURN u2, count(s) AS shared ORDER BY shared DESC
-        """
-        user = self.users.get(user_id)
-        if not user:
-            return []
-        user_skills = set(user.skills)
-        similar = []
-        for other in self.users.values():
-            if other.id == user_id:
-                continue
-            shared = user_skills & set(other.skills)
-            if shared:
-                similar.append((other, len(shared), list(shared)))
-        similar.sort(key=lambda x: x[1], reverse=True)
-        return similar
-
-    def get_recommendations(self, user_id: str):
-        """
-        Recommend users based on shared skills or common projects.
-        TODO Neo4j: MATCH (u:User {id:$id})-[:TIENE_HABILIDAD]->(s)<-[:TIENE_HABILIDAD]-(rec)
-                    WHERE NOT (u)-[:CONECTA_CON]-(rec) AND u <> rec
-                    RETURN DISTINCT rec, count(s) AS score ORDER BY score DESC
-        """
-        user = self.users.get(user_id)
-        if not user:
-            return []
-        connected_ids = {u.id for u in self.get_connections(user_id)} | {user_id}
-        user_skills = set(user.skills)
-        user_proj_ids = {p["project_id"] for p in self.participations if p["user_id"] == user_id}
-
-        recs = []
-        for uid, other in self.users.items():
-            if uid in connected_ids:
-                continue
-            shared_skills = user_skills & set(other.skills)
-            other_proj_ids = {p["project_id"] for p in self.participations if p["user_id"] == uid}
-            shared_projects = user_proj_ids & other_proj_ids
-            score = len(shared_skills) * 2 + len(shared_projects) * 3
-            if score > 0:
-                recs.append((other, score, list(shared_skills), list(shared_projects)))
-        recs.sort(key=lambda x: x[1], reverse=True)
-        return recs
-
-    def get_shortest_path(self, start_id: str, end_id: str):
-        """TODO Neo4j: MATCH path = shortestPath((a {id:$start})-[*]-(b {id:$end})) RETURN path"""
-        from collections import deque
-        adj = {}
-        for c in self.connections:
-            if c.status != "accepted":
-                continue
-            adj.setdefault(c.user_id_1, []).append(c.user_id_2)
-            adj.setdefault(c.user_id_2, []).append(c.user_id_1)
-        visited = {start_id}
-        queue = deque([(start_id, [start_id])])
-        while queue:
-            current, path = queue.popleft()
-            if current == end_id:
-                return [self.users.get(uid) for uid in path if uid in self.users]
-            for neighbor in adj.get(current, []):
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append((neighbor, path + [neighbor]))
+    def get_shortest_path(self, start_id: str, end_id: str) -> list:
+        rec = _one(
+            "MATCH (a:Usuario {email: $start}), (b:Usuario {email: $end}), "
+            "path = shortestPath((a)-[*..6]-(b)) "
+            "RETURN [n IN nodes(path) | coalesce(n.nombre, n.titulo)] AS ruta",
+            start=start_id, end=end_id,
+        )
+        if rec:
+            return rec["ruta"]
         return []
 
-    def get_network_graph_data(self):
-        """Get nodes and edges for the visual network graph."""
-        nodes = []
-        for u in self.users.values():
-            nodes.append({"id": u.id, "label": u.name, "type": "user", "color": u.avatar_color})
-        for c in self.companies.values():
-            nodes.append({"id": c.id, "label": c.name, "type": "company", "color": c.logo_color})
-        edges = []
-        for c in self.connections:
-            if c.status == "accepted":
-                edges.append({"from": c.user_id_1, "to": c.user_id_2, "type": "CONECTA_CON"})
-        for w in self.works_at:
-            if w.is_current:
-                edges.append({"from": w.user_id, "to": w.company_id, "type": "TRABAJA_EN"})
-        return {"nodes": nodes, "edges": edges}
+    def get_network_graph_data(self) -> dict:
+        if self._cache["network_graph_data"] is not None:
+            return self._cache["network_graph_data"]
+        users = _run(
+            "MATCH (u:Usuario) RETURN u.email AS id, u.nombre AS label, 'user' AS type"
+        )
+        companies = _run(
+            "MATCH (e:Empresa) RETURN e.nombre AS id, e.nombre AS label, 'company' AS type"
+        )
+        connections = _run(
+            "MATCH (a:Usuario)-[:CONECTA_CON]->(b:Usuario) "
+            "RETURN a.email AS from, b.email AS to, 'CONECTA_CON' AS type"
+        )
+        works = _run(
+            "MATCH (u:Usuario)-[:TRABAJA_EN]->(e:Empresa) "
+            "RETURN u.email AS from, e.nombre AS to, 'TRABAJA_EN' AS type"
+        )
 
-    def get_skill_match_percent(self, user_id: str, job_id: str):
-        """Calculate match % between user skills and job required skills."""
-        user = self.users.get(user_id)
-        job = self.jobs.get(job_id)
+        avatar_colors = ["#2563eb", "#7c3aed", "#059669", "#dc2626",
+                         "#d97706", "#0891b2", "#e11d48", "#4f46e5"]
+        logo_colors = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#0891b2"]
+
+        nodes = []
+        for u in users:
+            nodes.append({
+                "id": u["id"], "label": u["label"], "type": "user",
+                "color": avatar_colors[hash(u["id"]) % len(avatar_colors)],
+            })
+        for c in companies:
+            nodes.append({
+                "id": c["id"], "label": c["label"], "type": "company",
+                "color": logo_colors[hash(c["id"]) % len(logo_colors)],
+            })
+
+        edges = [{"from": r["from"], "to": r["to"], "type": r["type"]}
+                 for r in connections + works]
+
+        data = {"nodes": nodes, "edges": edges}
+        self._cache["network_graph_data"] = data
+        return data
+
+    def get_skill_match_percent(self, user_id: str, job_id: str) -> int:
+        user = self.get_user(user_id)
+        job = self.get_job(job_id)
         if not user or not job or not job.required_skills:
             return 0
         user_skills = set(user.skills)
         job_skills = set(job.required_skills)
+        if not job_skills:
+            return 0
         return int(len(user_skills & job_skills) / len(job_skills) * 100)
 
+    # ── Compatibilidad con works_at local (company register) ──────────────────
+
+    @property
+    def works_at(self):
+        """Propiedad de compatibilidad — devuelve lista vacía."""
+        if not hasattr(self, "_works_at"):
+            self._works_at = []
+        return self._works_at
+
     def close(self):
-        """Close database connection. TODO Neo4j: self.driver.close()"""
-        pass
+        driver = get_driver()
+        if driver:
+            driver.close()
