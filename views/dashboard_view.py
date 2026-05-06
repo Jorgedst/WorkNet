@@ -160,7 +160,9 @@ def dashboard_content(page: ft.Page, on_view_profile=None):
     )
 
     # ── Background loader ─────────────────────────────────────────────────────
+    import time
     def _load_data():
+        time.sleep(0.05)
         try:
             current_user  = service.get_current_user()
             admin_company = service.get_admin_company(current_user.id)
@@ -412,8 +414,9 @@ def dashboard_content(page: ft.Page, on_view_profile=None):
             pass
         try:
             graph_area.update()
+            page.update()
         except Exception:
             pass
 
-    threading.Thread(target=_load_data, daemon=True).start()
+    page.run_thread(_load_data)
     return layout

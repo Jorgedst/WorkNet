@@ -152,6 +152,8 @@ class GraphService:
     def _init_local_state(self):
         """Estado local mínimo: solo sesión y aplicaciones."""
         self.current_user_id = None   # email del usuario logueado
+        self._current_user_obj = None  # cached User object
+        self._admin_company_obj = None  # cached admin Company (or False if not admin)
         self._cache = {
             "all_users": None,
             "all_companies": None,
@@ -186,23 +188,37 @@ class GraphService:
             u_data["skills"] = [r["nombre"] for r in skills_rec]
             user = _neo4j_user_to_model(u_data)
             self.current_user_id = user.id
+            self._current_user_obj = user  # cache for session
+            self._admin_company_obj = None  # reset admin cache on login
             return user
         return None
 
     def get_current_user(self) -> User:
         if not self.current_user_id:
             return None
-        return self.get_user(self.current_user_id)
+        if self._current_user_obj and self._current_user_obj.id == self.current_user_id:
+            return self._current_user_obj
+        user = self.get_user(self.current_user_id)
+        self._current_user_obj = user
+        return user
 
     def get_admin_company(self, user_id: str):
         """Devuelve la empresa si el usuario es Administrador."""
+        # Return cached result if available
+        if self._admin_company_obj is not None:
+            return self._admin_company_obj if self._admin_company_obj else None
+        
+        # Check both the specific ADMINISTRA relationship and the generic TRABAJA_EN
         rec = _one(
-            "MATCH (u:Usuario {email: $email})-[:TRABAJA_EN]->(e:Empresa) "
-            "RETURN e",
+            "MATCH (u:Usuario {email: $email})-[r:ADMINISTRA|TRABAJA_EN]->(e:Empresa) "
+            "RETURN e LIMIT 1",
             email=user_id,
         )
         if rec:
-            return _neo4j_empresa_to_model(dict(rec["e"]))
+            company = _neo4j_empresa_to_model(dict(rec["e"]))
+            self._admin_company_obj = company
+            return company
+        self._admin_company_obj = False  # Sentinel: no admin company
         return None
 
     # ── Usuarios ───────────────────────────────────────────────────────────────
@@ -408,18 +424,21 @@ class GraphService:
         return None
 
     def get_company_projects(self, company_id: str) -> list:
-        """Proyectos cuyas ofertas fueron publicadas por la empresa."""
+        """Proyectos que pertenecen a esta empresa (vía PUBLICA_PROYECTO o vía ofertas)."""
+        # 1. Try direct PUBLICA_PROYECTO relationship first
         rows = _run(
-            "MATCH (e:Empresa {nombre: $nombre})-[:PUBLICA]->(o:Oferta) "
-            "MATCH (p:Proyecto) WHERE p.nombre = o.titulo OR "
-            "      exists((e)-[:PUBLICA]->(o)) "
-            "RETURN DISTINCT p, e.nombre AS empresa_nombre "
-            "LIMIT 20",
+            "MATCH (e:Empresa {nombre: $nombre})-[:PUBLICA_PROYECTO]->(p:Proyecto) "
+            "RETURN DISTINCT p, e.nombre AS empresa_nombre",
             nombre=company_id,
         )
-        # Fallback: traer todos los proyectos si la empresa no tiene relación directa
+        # 2. Also include projects linked via offers published by this company
         if not rows:
-            rows = _run("MATCH (p:Proyecto) RETURN p, '' AS empresa_nombre LIMIT 10")
+            rows = _run(
+                "MATCH (e:Empresa {nombre: $nombre})-[:PUBLICA]->(o:Oferta)<-[:PERTENECE_A]-(p:Proyecto) "
+                "RETURN DISTINCT p, e.nombre AS empresa_nombre",
+                nombre=company_id,
+            )
+        # No fallback — only return this company's projects
         return [_neo4j_proyecto_to_model({**dict(r["p"]), "empresa_nombre": r.get("empresa_nombre", "")})
                 for r in rows]
 
@@ -570,6 +589,14 @@ class GraphService:
             email=user_id
         )
         return [r["job_id"] for r in rows]
+
+    def get_job_applicants_count(self, job_id: str) -> int:
+        """Return how many users have applied to a specific job vacancy."""
+        rec = _one(
+            "MATCH (u:Usuario)-[:APLICA_A]->(o:Oferta {titulo: $titulo}) RETURN count(u) as n",
+            titulo=job_id
+        )
+        return rec["n"] if rec else 0
 
     # ── Análisis de grafos ─────────────────────────────────────────────────────
 

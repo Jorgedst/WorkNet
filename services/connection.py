@@ -93,8 +93,19 @@ def trabaja_en(driver, email_usuario, nombre_empresa):
     driver.execute_query(
         """
         MATCH (u:Usuario {email: $email})
-        MATCH (e:Empresa {nombre: $empresa})
+        MATCH (e:Empresa) WHERE e.nombre = $empresa OR e.empresa = $empresa
         MERGE (u)-[:TRABAJA_EN]->(e)
+        """,
+        email=email_usuario, empresa=nombre_empresa,
+        database_="005fc815",
+    )
+
+def administra_empresa(driver, email_usuario, nombre_empresa):
+    driver.execute_query(
+        """
+        MATCH (u:Usuario {email: $email})
+        MATCH (e:Empresa {nombre: $empresa})
+        MERGE (u)-[:ADMINISTRA]->(e)
         """,
         email=email_usuario, empresa=nombre_empresa,
         database_="005fc815",

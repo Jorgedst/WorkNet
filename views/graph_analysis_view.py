@@ -205,7 +205,23 @@ def _query_card(
 
             finally:
                 set_loading(False)
-                page.update()
+                # Use individual control updates which are more reliable from threads
+                try:
+                    loading_ring.update()
+                except Exception:
+                    pass
+                try:
+                    execute_btn.update()
+                except Exception:
+                    pass
+                try:
+                    status_text.update()
+                except Exception:
+                    pass
+                try:
+                    result_area.update()
+                except Exception:
+                    pass
 
         threading.Thread(target=_worker, daemon=True).start()
 

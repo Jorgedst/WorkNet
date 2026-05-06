@@ -62,7 +62,9 @@ def profile_content(page: ft.Page, user_id: str = None, on_view_profile=None):
         spacing=12, scroll=ft.ScrollMode.AUTO, expand=True,
     )
 
+    import time
     def _load_data():
+        time.sleep(0.05)
         try:
             company = service.get_user_company(user.id)
             connections = service.get_connections(user.id)
@@ -233,6 +235,7 @@ def profile_content(page: ft.Page, user_id: str = None, on_view_profile=None):
         )
         if content_container.page:
             content_container.update()
+            page.update()
 
-    threading.Thread(target=_load_data, daemon=True).start()
+    page.run_thread(_load_data)
     return layout

@@ -51,8 +51,16 @@ def jobs_content(page: ft.Page, on_view_profile=None):
     """Build the vacancies listing view — data loads in a background thread."""
     service = GraphService()
 
-    # Shared mutable state
-    _state = {"all_jobs": [], "companies_cache": {}, "card_builder": None}
+    # Shared mutable state — pre-cached data for instant search
+    _state = {
+        "all_jobs": [],
+        "companies_cache": {},
+        "match_cache": {},
+        "applied_cache": {},
+        "applicants_cache": {},
+        "card_builder": None,
+        "admin_company": None,
+    }
 
     def _on_search(e):
         query = (e.control.value or "").strip().lower()
@@ -104,7 +112,9 @@ def jobs_content(page: ft.Page, on_view_profile=None):
     )
 
     # ── Background loader ─────────────────────────────────────────────────────
+    import time
     def _load_data():
+        time.sleep(0.05)
         try:
             current_user  = service.get_current_user()
             admin_company = service.get_admin_company(current_user.id)
@@ -112,9 +122,64 @@ def jobs_content(page: ft.Page, on_view_profile=None):
         except Exception:
             return
 
+        _state["admin_company"] = admin_company
+
+        # For admin, only show their company's vacancies
+        if admin_company:
+            jobs_to_process = [j for j in all_jobs if j.company_name == admin_company.name]
+        else:
+            jobs_to_process = all_jobs
+
+        # Pre-cache match, applied, and applicants data for relevant jobs
+        match_cache = {}
+        applied_cache = {}
+        applicants_cache = {}
+        for j in jobs_to_process:
+            match_cache[j.id] = service.get_skill_match_percent(current_user.id, j.id)
+            applied_cache[j.id] = service.has_applied(current_user.id, j.id)
+            applicants_cache[j.id] = service.get_job_applicants_count(j.id)
+
+        _state["match_cache"] = match_cache
+        _state["applied_cache"] = applied_cache
+        _state["applicants_cache"] = applicants_cache
+
         # ── Job card builder ──────────────────────────────────────────────────
         def apply_to_job(e, job_id, job_title):
+            # Re-check occupancy before applying
+            current_applicants = service.get_job_applicants_count(job_id)
+            if current_applicants > 0:
+                occupied_dlg = ft.AlertDialog(
+                    title=ft.Row(controls=[
+                        ft.Icon(ft.Icons.BLOCK_ROUNDED, color="#ef4444", size=28),
+                        ft.Text("Vacante ocupada", color=TEXT_PRIMARY, size=16,
+                                weight=ft.FontWeight.W_600),
+                    ], spacing=10),
+                    content=ft.Text(
+                        "Esta vacante ya ha sido tomada por otro usuario.\n"
+                        "Busca otras vacantes disponibles.",
+                        color=TEXT_SECONDARY, size=14,
+                    ),
+                    bgcolor=BG_CARD,
+                    actions=[ft.Container(
+                        content=ft.Text("Entendido", color=TEXT_PRIMARY, size=13, weight=ft.FontWeight.W_500),
+                        bgcolor=ACCENT_PRIMARY, border_radius=8,
+                        padding=ft.padding.symmetric(horizontal=20, vertical=8),
+                        on_click=lambda e: (setattr(occupied_dlg, "open", False), page.update()), ink=True,
+                    )],
+                )
+                page.overlay.append(occupied_dlg)
+                occupied_dlg.open = True
+                # Update button to show occupied
+                e.control.content.value = "Ocupada"
+                e.control.content.color = TEXT_SECONDARY
+                e.control.bgcolor = "#8b949e15"
+                e.control.on_click = None
+                page.update()
+                return
+
             service.apply_to_job(current_user.id, job_id)
+            # Update cache
+            _state["applied_cache"][job_id] = True
             e.control.content.value = "Aplicado"
             e.control.content.color = ACCENT_SUCCESS
             e.control.bgcolor = ACCENT_SUCCESS + "20"
@@ -146,9 +211,37 @@ def jobs_content(page: ft.Page, on_view_profile=None):
         def job_card(job, company=None):
             company_color    = company.logo_color if company else ACCENT_PRIMARY
             company_initials = company.initials if company else "?"
-            match      = service.get_skill_match_percent(current_user.id, job.id)
+            # Use pre-cached data instead of DB queries per card
+            match       = _state["match_cache"].get(job.id, 0)
             match_color = ACCENT_SUCCESS if match >= 60 else "#f59e0b" if match >= 30 else TEXT_SECONDARY
-            has_applied = service.has_applied(current_user.id, job.id)
+            has_applied = _state["applied_cache"].get(job.id, False)
+            applicants  = _state["applicants_cache"].get(job.id, 0)
+            is_occupied = applicants > 0 and not has_applied
+
+            # Determine if this is an admin's own vacancy
+            is_own_vacancy = admin_company and job.company_name == admin_company.name
+
+            # Determine button state
+            if is_own_vacancy:
+                btn_text = "Tu Vacante"
+                btn_color = ACCENT_SUCCESS
+                btn_bg = ACCENT_SUCCESS + "20"
+                btn_click = None
+            elif has_applied:
+                btn_text = "Aplicado"
+                btn_color = ACCENT_SUCCESS
+                btn_bg = ACCENT_SUCCESS + "20"
+                btn_click = None
+            elif is_occupied:
+                btn_text = "Ocupada"
+                btn_color = TEXT_SECONDARY
+                btn_bg = "#8b949e15"
+                btn_click = None
+            else:
+                btn_text = "Aplicar"
+                btn_color = TEXT_PRIMARY
+                btn_bg = ACCENT_PRIMARY
+                btn_click = lambda e, jid=job.id, jt=job.title: apply_to_job(e, jid, jt)
 
             return ft.Container(
                 content=ft.Row(
@@ -197,15 +290,14 @@ def jobs_content(page: ft.Page, on_view_profile=None):
                                 ft.Container(height=8),
                                 ft.Container(
                                     content=ft.Text(
-                                        "Tu Vacante" if admin_company else ("Aplicado" if has_applied else "Aplicar"),
-                                        color=TEXT_PRIMARY if not has_applied and not admin_company else ACCENT_SUCCESS,
+                                        btn_text,
+                                        color=btn_color,
                                         size=12, weight=ft.FontWeight.W_500,
                                     ),
-                                    bgcolor=ACCENT_PRIMARY if (not has_applied and not admin_company) else ACCENT_SUCCESS + "20",
+                                    bgcolor=btn_bg,
                                     border_radius=8,
                                     padding=ft.padding.symmetric(horizontal=16, vertical=8),
-                                    on_click=(lambda e, jid=job.id, jt=job.title: apply_to_job(e, jid, jt))
-                                    if not has_applied and not admin_company else None,
+                                    on_click=btn_click,
                                     ink=True,
                                 ),
                             ],
@@ -222,25 +314,32 @@ def jobs_content(page: ft.Page, on_view_profile=None):
         # ── Build list items ──────────────────────────────────────────────────
         list_items = []
         if admin_company:
+            # Admin: show only their company's vacancies grouped by project
             company_projects = service.get_company_projects(admin_company.id)
+            company_jobs = jobs_to_process  # already filtered to own company
             for p in company_projects:
+                p_jobs = [j for j in company_jobs if j.project_name == p.name]
                 list_items.append(ft.Container(
                     content=ft.Row([
                         ft.Icon(ft.Icons.FOLDER_ROUNDED, color=ACCENT_PRIMARY, size=20),
                         ft.Text(f"Proyecto: {p.name}", color=TEXT_PRIMARY, size=18,
                                 weight=ft.FontWeight.W_600),
+                        ft.Container(expand=True),
+                        ft.Text(f"{len(p_jobs)} vacantes", color=TEXT_SECONDARY, size=12),
                     ], spacing=10),
                     margin=ft.margin.only(top=10, bottom=5),
                 ))
-                p_jobs = service.get_project_jobs(p.id)
                 if p_jobs:
                     list_items.extend([job_card(j) for j in p_jobs])
                 else:
                     list_items.append(ft.Text("No hay vacantes en este proyecto.",
                                                color=TEXT_SECONDARY, size=13))
                 list_items.append(ft.Container(height=10))
+            # Store in state for search
+            _state["all_jobs"]     = company_jobs
+            _state["card_builder"] = job_card
         else:
-            # Pre-fetch companies once to avoid N calls inside job_card
+            # Regular user: show all jobs from all companies
             companies_cache = {}
             for j in all_jobs:
                 if j.company_id not in companies_cache:
@@ -256,9 +355,15 @@ def jobs_content(page: ft.Page, on_view_profile=None):
             ft.Text("No hay vacantes disponibles.", color=TEXT_SECONDARY)
         ]
         try:
-            list_container.update()
+            if list_container.page:
+                list_container.update()
+        except Exception as e:
+            pass
+            
+        try:
+            page.update()
         except Exception:
             pass
 
-    threading.Thread(target=_load_data, daemon=True).start()
+    page.run_thread(_load_data)
     return layout

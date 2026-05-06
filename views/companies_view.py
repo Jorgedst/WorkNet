@@ -117,9 +117,12 @@ def companies_content(page: ft.Page, on_view_profile=None):
     )
 
     # ── Background loader ─────────────────────────────────────────────────────
+    import time
     def _load_data():
+        time.sleep(0.05)
         try:
             current_user = service.get_current_user()
+            admin_company = service.get_admin_company(current_user.id)
             companies    = service.get_all_companies()
             all_projects = service.get_all_projects()
             all_jobs     = service.get_all_jobs()
@@ -143,7 +146,29 @@ def companies_content(page: ft.Page, on_view_profile=None):
         def show_project_vacancies(project):
             vacancies = service.get_project_jobs(project.id)
 
+            # Check if user is admin of this project's company
+            is_own_company = admin_company and project.company_name == admin_company.name
+
             def apply_to_job(e, job_id):
+                # Re-check occupancy before applying
+                current_applicants = service.get_job_applicants_count(job_id)
+                if current_applicants > 0:
+                    occupied_dlg = ft.AlertDialog(
+                        title=ft.Text("Vacante ocupada", color=TEXT_PRIMARY),
+                        content=ft.Text("Esta vacante ya ha sido tomada por otro usuario.", color=TEXT_SECONDARY),
+                        bgcolor=BG_CARD,
+                        actions=[ft.Container(
+                            content=ft.Text("Entendido", color=TEXT_PRIMARY, size=13),
+                            bgcolor=ACCENT_PRIMARY, border_radius=8,
+                            padding=ft.padding.symmetric(horizontal=20, vertical=8),
+                            on_click=lambda e: (setattr(occupied_dlg, "open", False), page.update()), ink=True,
+                        )],
+                    )
+                    page.overlay.append(occupied_dlg)
+                    occupied_dlg.open = True
+                    page.update()
+                    return
+
                 service.apply_to_job(current_user.id, job_id)
                 e.control.content.value = "Aplicado"
                 e.control.content.color = ACCENT_SUCCESS
@@ -170,6 +195,31 @@ def companies_content(page: ft.Page, on_view_profile=None):
                     match = service.get_skill_match_percent(current_user.id, job.id)
                     match_color = ACCENT_SUCCESS if match >= 60 else "#f59e0b" if match >= 30 else TEXT_SECONDARY
                     has_applied = service.has_applied(current_user.id, job.id)
+                    applicants = service.get_job_applicants_count(job.id)
+                    is_occupied = applicants > 0 and not has_applied
+
+                    # Determine button state
+                    if is_own_company:
+                        btn_text = "Tu Vacante"
+                        btn_color = ACCENT_SUCCESS
+                        btn_bg = ACCENT_SUCCESS + "20"
+                        btn_click = None
+                    elif has_applied:
+                        btn_text = "Aplicado"
+                        btn_color = ACCENT_SUCCESS
+                        btn_bg = ACCENT_SUCCESS + "20"
+                        btn_click = None
+                    elif is_occupied:
+                        btn_text = "Ocupada"
+                        btn_color = TEXT_SECONDARY
+                        btn_bg = "#8b949e15"
+                        btn_click = None
+                    else:
+                        btn_text = "Aplicar"
+                        btn_color = TEXT_PRIMARY
+                        btn_bg = ACCENT_PRIMARY
+                        btn_click = lambda e, jid=job.id: apply_to_job(e, jid)
+
                     items.append(ft.Container(
                         content=ft.Row(controls=[
                             ft.Column(controls=[
@@ -184,13 +234,11 @@ def companies_content(page: ft.Page, on_view_profile=None):
                             ft.Column(controls=[
                                 ft.Text(f"{match}%", color=match_color, size=16, weight=ft.FontWeight.BOLD),
                                 ft.Container(
-                                    content=ft.Text("Aplicado" if has_applied else "Aplicar",
-                                                    color=TEXT_PRIMARY if not has_applied else ACCENT_SUCCESS,
-                                                    size=12),
-                                    bgcolor=ACCENT_PRIMARY if not has_applied else ACCENT_SUCCESS + "20",
+                                    content=ft.Text(btn_text, color=btn_color, size=12),
+                                    bgcolor=btn_bg,
                                     border_radius=8,
                                     padding=ft.padding.symmetric(horizontal=12, vertical=6),
-                                    on_click=(lambda e, jid=job.id: apply_to_job(e, jid)) if not has_applied else None,
+                                    on_click=btn_click,
                                     ink=True,
                                 ),
                             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
@@ -351,12 +399,17 @@ def companies_content(page: ft.Page, on_view_profile=None):
             "No hay empresas registradas.", color=TEXT_SECONDARY
         )
 
+        # Store card builder in state for search filtering
+        _state["all_companies"] = companies
+        _state["card_builder"] = company_card
+
         # ── Swap skeleton → real content ──────────────────────────────────────
         grid_container.content = grid
         try:
             grid_container.update()
+            page.update()
         except Exception:
             pass
 
-    threading.Thread(target=_load_data, daemon=True).start()
+    page.run_thread(_load_data)
     return layout

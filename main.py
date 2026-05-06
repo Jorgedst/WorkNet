@@ -22,7 +22,7 @@ def main(page: ft.Page):
     page.window.min_width = 1100
     page.window.min_height = 600
     page.window.alignment = ft.Alignment(0, 0)
-    page.window.maximized = True
+    page.window.center()
     page.bgcolor = BG_PRIMARY
     page.padding = 0
     page.spacing = 0

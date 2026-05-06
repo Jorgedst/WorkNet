@@ -76,7 +76,9 @@ def network_content(page: ft.Page, on_view_profile=None):
         spacing=8, scroll=ft.ScrollMode.AUTO, expand=True,
     )
 
+    import time
     def _load_data():
+        time.sleep(0.05)
         try:
             current_user = service.get_current_user()
             connections = service.get_connections(current_user.id)
@@ -178,8 +180,9 @@ def network_content(page: ft.Page, on_view_profile=None):
         content_container.content = build_ui(connections, recommendations)
         if content_container.page:
             content_container.update()
+            page.update()
 
-    threading.Thread(target=_load_data, daemon=True).start()
+    page.run_thread(_load_data)
     return layout
 
 
